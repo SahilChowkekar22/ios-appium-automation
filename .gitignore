@@ -1,0 +1,14 @@
+# macOS
+.DS_Store
+
+# Xcode user-specific and generated files
+DerivedData/
+build/
+*.xcresult
+*.xcarchive
+xcuserdata/
+*.xcuserstate
+
+# Node.js dependencies and Appium output
+node_modules/
+appium.log
