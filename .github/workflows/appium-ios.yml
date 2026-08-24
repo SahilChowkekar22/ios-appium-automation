@@ -1,0 +1,79 @@
+name: Appium iOS Tests
+
+on:
+  push:
+    branches: [main]
+
+  pull_request:
+
+jobs:
+  appium-ios:
+    runs-on: macos-15
+
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install Appium dependencies
+        run: npm ci
+
+      - name: Create and boot iPhone Simulator
+        run: |
+          RUNTIME=$(xcrun simctl list runtimes -j | jq -r \
+            '.runtimes[] |
+            select(.name == "iOS 26.2" and .isAvailable) |
+            .identifier' | head -1)
+
+          DEVICE_TYPE=$(xcrun simctl list devicetypes -j | jq -r \
+            '.devicetypes[] |
+            select(.name == "iPhone 17") |
+            .identifier' | head -1)
+
+          SIMULATOR_UDID=$(xcrun simctl create \
+            "Appium iPhone 17" \
+            "$DEVICE_TYPE" \
+            "$RUNTIME")
+
+          xcrun simctl boot "$SIMULATOR_UDID"
+
+          xcrun simctl bootstatus "$SIMULATOR_UDID" -b
+
+          echo "SIMULATOR_UDID=$SIMULATOR_UDID" >> "$GITHUB_ENV"
+          echo "IOS_DEVICE_NAME=Appium iPhone 17" >> "$GITHUB_ENV"
+          echo "IOS_VERSION=26.2" >> "$GITHUB_ENV"
+
+      - name: Build the Simulator app
+        run: |
+          xcodebuild \
+            -project LoginScreen.xcodeproj \
+            -scheme LoginScreen \
+            -sdk iphonesimulator \
+            -configuration Debug \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            build
+
+      - name: Start Appium server
+        run: |
+          npx appium --log appium.log &
+
+          until curl --silent --fail \
+            http://127.0.0.1:4723/status; do
+            sleep 2
+          done
+
+      - name: Run Appium login test
+        run: npm run test:appium
+
+      - name: Upload Appium log if the test fails
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: appium-log
+          path: appium.log

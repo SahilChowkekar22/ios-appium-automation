@@ -12,9 +12,9 @@ async function runTest() {
         capabilities: {
             platformName: "iOS",
             "appium:automationName": "XCUITest",
-            "appium:deviceName": "iPhone 17",
-            "appium:platformVersion": "26.2",
-            "appium:udid": "434276BD-179D-4B90-B0E5-3C1DE56AC980",
+            "appium:deviceName": process.env.IOS_DEVICE_NAME || "iPhone 17",
+            "appium:platformVersion": process.env.IOS_VERSION || "26.2",
+            "appium:udid": process.env.SIMULATOR_UDID,
             "appium:app": path.resolve(
                 "build/Build/Products/Debug-iphonesimulator/LoginScreen.app"
             ),
