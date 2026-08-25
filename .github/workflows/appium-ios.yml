@@ -1,10 +1,15 @@
 name: Appium iOS Tests
 
 on:
+  # Run after code is merged into main
   push:
     branches: [main]
 
+  # Run when a PR is opened/updated
   pull_request:
+
+  # Run when a PR enters GitHub Merge Queue
+  merge_group:
 
   # Run automatically 4 times per day
   schedule:
