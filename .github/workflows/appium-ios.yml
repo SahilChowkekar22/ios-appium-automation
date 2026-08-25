@@ -6,6 +6,16 @@ on:
 
   pull_request:
 
+  # Run automatically 4 times per day
+  schedule:
+    - cron: "0 12 * * *"
+    - cron: "0 16 * * *"
+    - cron: "0 20 * * *"
+    - cron: "0 0 * * *"
+
+  # Allow manual execution from GitHub Actions
+  workflow_dispatch:
+
 jobs:
   appium-ios:
     runs-on: macos-15
