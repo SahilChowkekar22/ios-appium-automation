@@ -5,7 +5,7 @@ on:
   push:
     branches: [main]
 
-  # Run when a PR is opened/updated
+  # Run when a PR is opened or updated
   pull_request:
 
   # Run when a PR enters GitHub Merge Queue
@@ -24,26 +24,42 @@ on:
 jobs:
   appium-ios:
     runs-on: macos-15
+
     env:
-      # Match the iOS 26.2 simulator used by this workflow.
       DEVELOPER_DIR: /Applications/Xcode_26.2.app/Contents/Developer
 
     steps:
+
+      # --------------------------------
+      # 1. Checkout source code
+      # --------------------------------
       - name: Check out code
         uses: actions/checkout@v4
 
+      # --------------------------------
+      # 2. Setup Node.js
+      # --------------------------------
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
 
+      # --------------------------------
+      # 3. Install dependencies
+      # --------------------------------
       - name: Install Appium dependencies
         run: npm ci
 
+      # --------------------------------
+      # 4. Create and boot iPhone 17
+      # --------------------------------
       - name: Create and boot iPhone Simulator
         run: |
+          echo "===== Xcode Version ====="
           xcodebuild -version
+
+          echo "===== Available Runtimes ====="
           xcrun simctl list runtimes
 
           RUNTIME=$(xcrun simctl list runtimes -j | jq -r \
@@ -56,19 +72,57 @@ jobs:
             select(.name == "iPhone 17") |
             .identifier' | head -1)
 
+          if [ -z "$RUNTIME" ]; then
+            echo "ERROR: iOS 26.2 runtime was not found."
+            exit 1
+          fi
+
+          if [ -z "$DEVICE_TYPE" ]; then
+            echo "ERROR: iPhone 17 device type was not found."
+            exit 1
+          fi
+
+          echo "Runtime: $RUNTIME"
+          echo "Device Type: $DEVICE_TYPE"
+
           SIMULATOR_UDID=$(xcrun simctl create \
             "Appium iPhone 17" \
             "$DEVICE_TYPE" \
             "$RUNTIME")
 
+          echo "Created Simulator: $SIMULATOR_UDID"
+
           xcrun simctl boot "$SIMULATOR_UDID"
 
+          echo "Waiting for Simulator to boot..."
+
           xcrun simctl bootstatus "$SIMULATOR_UDID" -b
+
+          echo "Simulator booted successfully."
 
           echo "SIMULATOR_UDID=$SIMULATOR_UDID" >> "$GITHUB_ENV"
           echo "IOS_DEVICE_NAME=Appium iPhone 17" >> "$GITHUB_ENV"
           echo "IOS_VERSION=26.2" >> "$GITHUB_ENV"
 
+      # --------------------------------
+      # 5. Verify Simulator
+      # --------------------------------
+      - name: Verify Simulator
+        run: |
+          echo "Simulator UDID: $SIMULATOR_UDID"
+
+          echo "===== Simulator Devices ====="
+          xcrun simctl list devices
+
+          echo "===== Checking Simulator Boot Status ====="
+          xcrun simctl bootstatus "$SIMULATOR_UDID" -b
+
+          echo "===== Confirming Simulator ====="
+          xcrun simctl list devices | grep "$SIMULATOR_UDID"
+
+      # --------------------------------
+      # 6. Build iOS Simulator app
+      # --------------------------------
       - name: Build the Simulator app
         run: |
           xcodebuild \
@@ -80,21 +134,72 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             build
 
+      # --------------------------------
+      # 7. Start Appium
+      # --------------------------------
       - name: Start Appium server
         run: |
-          npx appium --log appium.log &
+          npx appium --log appium.log > appium-console.log 2>&1 &
 
-          until curl --silent --fail \
-            http://127.0.0.1:4723/status; do
+          APPIUM_PID=$!
+
+          echo "APPIUM_PID=$APPIUM_PID" >> "$GITHUB_ENV"
+
+          echo "Waiting for Appium..."
+
+          for i in {1..60}; do
+            if curl --silent --fail \
+              http://127.0.0.1:4723/status > /dev/null; then
+
+              echo "Appium is ready."
+              break
+            fi
+
+            echo "Waiting for Appium... $i/60"
             sleep 2
           done
 
+          if ! curl --silent --fail \
+            http://127.0.0.1:4723/status > /dev/null; then
+
+            echo "ERROR: Appium did not start successfully."
+
+            echo "===== Appium Console Log ====="
+            cat appium-console.log || true
+
+            exit 1
+          fi
+
+      # --------------------------------
+      # 8. Run Appium tests
+      # --------------------------------
       - name: Run Appium login test
         run: npm run test:appium
 
-      - name: Upload Appium log if the test fails
-        if: failure()
+      # --------------------------------
+      # 9. Upload Appium logs
+      # --------------------------------
+      - name: Upload Appium logs
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: appium-log
-          path: appium.log
+          name: appium-logs
+          path: |
+            appium.log
+            appium-console.log
+          if-no-files-found: warn
+
+      # --------------------------------
+      # 10. Collect Simulator information
+      # --------------------------------
+      - name: Collect Simulator logs
+        if: failure()
+        run: |
+          echo "===== SIMULATOR STATUS ====="
+          xcrun simctl list devices
+
+          echo "===== APPIUM LOG ====="
+          cat appium.log || true
+
+          echo "===== APPIUM CONSOLE LOG ====="
+          cat appium-console.log || true
