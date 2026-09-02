@@ -21,6 +21,7 @@ on:
   # Allow manual execution from GitHub Actions
   workflow_dispatch:
 
+
 jobs:
   appium-ios:
     runs-on: macos-15
@@ -36,6 +37,7 @@ jobs:
       - name: Check out code
         uses: actions/checkout@v4
 
+
       # --------------------------------
       # 2. Setup Node.js
       # --------------------------------
@@ -45,14 +47,16 @@ jobs:
           node-version: 22
           cache: npm
 
+
       # --------------------------------
       # 3. Install dependencies
       # --------------------------------
       - name: Install Appium dependencies
         run: npm ci
 
+
       # --------------------------------
-      # 4. Create and boot iPhone 17
+      # 4. Create and boot iPhone 17 Simulator
       # --------------------------------
       - name: Create and boot iPhone Simulator
         run: |
@@ -104,6 +108,7 @@ jobs:
           echo "IOS_DEVICE_NAME=Appium iPhone 17" >> "$GITHUB_ENV"
           echo "IOS_VERSION=26.2" >> "$GITHUB_ENV"
 
+
       # --------------------------------
       # 5. Verify Simulator
       # --------------------------------
@@ -120,6 +125,7 @@ jobs:
           echo "===== Confirming Simulator ====="
           xcrun simctl list devices | grep "$SIMULATOR_UDID"
 
+
       # --------------------------------
       # 6. Build iOS Simulator app
       # --------------------------------
@@ -133,6 +139,7 @@ jobs:
             -derivedDataPath build \
             CODE_SIGNING_ALLOWED=NO \
             build
+
 
       # --------------------------------
       # 7. Start Appium
@@ -170,14 +177,177 @@ jobs:
             exit 1
           fi
 
+
       # --------------------------------
       # 8. Run Appium tests
       # --------------------------------
       - name: Run Appium login test
         run: npm run test:appium
 
+
+      # ============================================================
+      # DEVELOPMENT IPA BUILD STARTS HERE
+      # ============================================================
+
       # --------------------------------
-      # 9. Upload Appium logs
+      # 9. Install Apple Development Certificate
+      # --------------------------------
+      - name: Install Apple signing certificate
+        env:
+          CERTIFICATE_BASE64: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          echo "Installing Apple Development Certificate..."
+
+          CERTIFICATE_PATH="$RUNNER_TEMP/development_certificate.p12"
+          KEYCHAIN_PATH="$RUNNER_TEMP/build.keychain-db"
+          KEYCHAIN_PASSWORD="build-password"
+
+          # Decode certificate
+          echo "$CERTIFICATE_BASE64" | base64 --decode > "$CERTIFICATE_PATH"
+
+          # Create temporary keychain
+          security create-keychain \
+            -p "$KEYCHAIN_PASSWORD" \
+            "$KEYCHAIN_PATH"
+
+          # Unlock keychain
+          security unlock-keychain \
+            -p "$KEYCHAIN_PASSWORD" \
+            "$KEYCHAIN_PATH"
+
+          # Make keychain default
+          security default-keychain \
+            -s "$KEYCHAIN_PATH"
+
+          # Keep keychain unlocked
+          security set-keychain-settings \
+            -lut 21600 \
+            "$KEYCHAIN_PATH"
+
+          # Import certificate
+          security import "$CERTIFICATE_PATH" \
+            -P "$CERTIFICATE_PASSWORD" \
+            -A \
+            -t cert \
+            -f pkcs12 \
+            -k "$KEYCHAIN_PATH"
+
+          # Allow codesign to access private key
+          security set-key-partition-list \
+            -S apple-tool:,apple: \
+            -s \
+            -k "$KEYCHAIN_PASSWORD" \
+            "$KEYCHAIN_PATH"
+
+          echo "Certificate installed successfully."
+
+
+      # --------------------------------
+      # 10. Install Development Provisioning Profile
+      # --------------------------------
+      - name: Install provisioning profile
+        env:
+          PROFILE_BASE64: ${{ secrets.APPLE_PROVISIONING_PROFILE_BASE64 }}
+        run: |
+          echo "Installing Development Provisioning Profile..."
+
+          PROFILE_PATH="$RUNNER_TEMP/LoginScreen_Development.mobileprovision"
+
+          # Decode profile
+          echo "$PROFILE_BASE64" | base64 --decode > "$PROFILE_PATH"
+
+          # Create provisioning profile directory
+          mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
+
+          # Install profile
+          cp "$PROFILE_PATH" \
+            "$HOME/Library/MobileDevice/Provisioning Profiles/"
+
+          echo "Provisioning profile installed successfully."
+
+
+      # --------------------------------
+      # 11. Verify Code Signing
+      # --------------------------------
+      - name: Verify signing identities
+        run: |
+          echo "===== Available Signing Identities ====="
+
+          security find-identity \
+            -v \
+            -p codesigning
+
+          echo "===== Provisioning Profiles ====="
+
+          ls -la \
+            "$HOME/Library/MobileDevice/Provisioning Profiles"
+
+
+      # --------------------------------
+      # 12. Build Development Archive
+      # --------------------------------
+      - name: Build Development Archive
+        run: |
+          echo "Building Development Archive..."
+
+          xcodebuild archive \
+            -project LoginScreen.xcodeproj \
+            -scheme LoginScreen \
+            -configuration Debug \
+            -sdk iphoneos \
+            -archivePath build/LoginScreen.xcarchive
+
+          echo "Development Archive created."
+
+          echo "===== Archive ====="
+          ls -la build/LoginScreen.xcarchive
+
+
+      # --------------------------------
+      # 13. Export Development IPA
+      # --------------------------------
+      - name: Export Development IPA
+        run: |
+          echo "Exporting Development IPA..."
+
+          xcodebuild -exportArchive \
+            -archivePath build/LoginScreen.xcarchive \
+            -exportPath build/development \
+            -exportOptionsPlist ExportOptions.plist
+
+          echo "===== Development IPA ====="
+          ls -la build/development/
+
+
+      # --------------------------------
+      # 14. Verify IPA
+      # --------------------------------
+      - name: Verify IPA
+        run: |
+          echo "===== IPA FILE ====="
+
+          ls -lh build/development/*.ipa
+
+          echo "===== IPA DETAILS ====="
+
+          unzip -l build/development/*.ipa | head -30
+
+
+      # --------------------------------
+      # 15. Upload Development IPA
+      # --------------------------------
+      - name: Upload Development IPA
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: LoginScreen-Development-IPA
+          path: build/development/*.ipa
+          if-no-files-found: error
+
+
+      # --------------------------------
+      # 16. Upload Appium logs
       # --------------------------------
       - name: Upload Appium logs
         if: always()
@@ -189,17 +359,21 @@ jobs:
             appium-console.log
           if-no-files-found: warn
 
+
       # --------------------------------
-      # 10. Collect Simulator information
+      # 17. Collect Simulator information
       # --------------------------------
       - name: Collect Simulator logs
         if: failure()
         run: |
           echo "===== SIMULATOR STATUS ====="
+
           xcrun simctl list devices
 
           echo "===== APPIUM LOG ====="
+
           cat appium.log || true
 
           echo "===== APPIUM CONSOLE LOG ====="
+
           cat appium-console.log || true
